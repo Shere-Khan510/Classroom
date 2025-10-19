@@ -32,4 +32,29 @@
    - For better security, it's recommended to use SSH keys or GitHub CLI
    - Alternatively, you can use GitHub Desktop for a graphical interface
 
-Need help setting up SSH keys or encountering issues? Visit: https://docs.github.com/en/authentication
+## Troubleshooting Permission Errors
+
+If you see a "Permission denied" or "403" error when pushing:
+
+1. Verify you're using the correct GitHub account:
+   ```bash
+   git config --global user.name
+   git config --global user.email
+   ```
+
+2. Re-authenticate with GitHub:
+   - Go to GitHub's website and sign in
+   - Generate a Personal Access Token:
+     1. Click your profile picture → Settings
+     2. Scroll to Developer Settings → Personal Access Tokens → Tokens (classic)
+     3. Generate new token
+     4. Select repo and workflow permissions
+     5. Copy the generated token
+
+3. When pushing, use the token as your password:
+   ```bash
+   git remote set-url origin https://YOUR-USERNAME@github.com/Shere-Khan510/Classroom.git
+   ```
+   When prompted for password, use your Personal Access Token.
+
+Need more help? Visit: https://docs.github.com/en/authentication
