@@ -115,7 +115,10 @@ const REGEX = {
   RIGHT_COLUMN_CONTENT: /^right[\s:]+(.+)$/i,
 
   VIDEO_SIMPLE: /^video[\s:]+(.+)$/i,
-  IMAGE_SIMPLE: /^image[\s:]+(.+)$/i
+  IMAGE_SIMPLE: /^image[\s:]+(.+)$/i,
+
+  // Speaker Notes
+  SPEAKER_NOTES_START: /^\*\*(?:Speaker Notes|Teaching Notes|Notes):\*\*\s*(.*)$/i
 };
 
 // ============================================================================
@@ -127,6 +130,7 @@ const REGEX = {
  * @property {boolean} isTitle - Always true for title slides
  * @property {string} title - The main title text
  * @property {string} subtitle - Optional subtitle text
+ * @property {string} notes - Speaker notes for the slide
  */
 
 /**
@@ -137,6 +141,7 @@ const REGEX = {
  * @property {string[]} bullets - Array of bullet point text
  * @property {string[]} images - Array of image URLs (http/https or GDRIVE:fileId)
  * @property {string[]} videos - Array of YouTube video URLs
+ * @property {string} notes - Speaker notes for the slide
  */
 
 /**
@@ -150,6 +155,7 @@ const REGEX = {
  * @property {string[]} rightImages - Right column image URLs
  * @property {string[]} leftVideos - Left column video URLs
  * @property {string[]} rightVideos - Right column video URLs
+ * @property {string} notes - Speaker notes for the slide
  */
 
 // ============================================================================
@@ -277,8 +283,8 @@ function extractDriveFileId(urlOrRef) {
  */
 function createSlideDataObject(type, initialData = {}) {
   const defaults = {
-    title: { isTitle: true, title: '', subtitle: '' },
-    content: { isTitle: false, headline: '', subtitle: '', bullets: [], images: [], videos: [] },
+    title: { isTitle: true, title: '', subtitle: '', notes: '' },
+    content: { isTitle: false, headline: '', subtitle: '', bullets: [], images: [], videos: [], notes: '' },
     'two-column': {
       isTitle: false,
       layout: 'two-column',
@@ -288,7 +294,8 @@ function createSlideDataObject(type, initialData = {}) {
       leftImages: [],
       rightImages: [],
       leftVideos: [],
-      rightVideos: []
+      rightVideos: [],
+      notes: ''
     }
   };
 
@@ -353,6 +360,28 @@ function insertVideoWithErrorHandling(slide, videoUrl, x, y, width, height, erro
     const errorBox = slide.insertTextBox('[Video Error: ' + e.message + ']', x, y, width, errorHeight);
     errorBox.getText().getTextStyle().setFontSize(errorFontSize).setItalic(true);
     return errorHeight + 10;
+  }
+}
+
+/**
+ * Sets speaker notes for a slide.
+ * @param {Slide} slide - The slide to add speaker notes to
+ * @param {string} notesText - The speaker notes text
+ *
+ * @example
+ * setSpeakerNotes(slide, 'Remember to emphasize this point during presentation');
+ */
+function setSpeakerNotes(slide, notesText) {
+  if (!notesText || notesText.trim().length === 0) {
+    return; // No notes to add
+  }
+
+  try {
+    const notesPage = slide.getSpeakerNotesPage();
+    const notesShape = notesPage.getSpeakerNotesShape();
+    notesShape.getText().setText(notesText.trim());
+  } catch (e) {
+    Logger.log('Error setting speaker notes: ' + e.message);
   }
 }
 
@@ -577,17 +606,55 @@ function parseDocument(text) {
   let inLeftColumn = false;          // Track if we're in left column of two-column layout
   let inRightColumn = false;         // Track if we're in right column of two-column layout
   let lastHeadingCanHaveSubtitle = false;  // Track if previous heading was H1/H2 (affects H3 interpretation)
+  let inSpeakerNotes = false;        // Track if we're currently capturing speaker notes
 
   // Process each line of the document
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmedLine = line.trim();
 
-    // Skip empty lines
+    // Skip empty lines (unless we're in speaker notes, where we preserve them)
     if (trimmedLine.length === 0) {
+      if (inSpeakerNotes && currentSlide) {
+        currentSlide.notes += '\n';
+      }
       continue;
     }
-    
+
+    // ========================================================================
+    // SPEAKER NOTES DETECTION
+    // ========================================================================
+    // Check for speaker notes start marker
+    const speakerNotesMatch = trimmedLine.match(REGEX.SPEAKER_NOTES_START);
+    if (speakerNotesMatch) {
+      if (currentSlide) {
+        // Start capturing speaker notes
+        inSpeakerNotes = true;
+        const initialNotes = speakerNotesMatch[1]; // Text after the marker on same line
+        currentSlide.notes = initialNotes ? initialNotes + '\n' : '';
+      }
+      continue;
+    }
+
+    // If we're in speaker notes, check if we should stop
+    if (inSpeakerNotes) {
+      // Stop speaker notes if we hit a heading or two-column marker
+      if (trimmedLine.match(REGEX.MARKDOWN_H1) ||
+          trimmedLine.match(REGEX.MARKDOWN_H2) ||
+          trimmedLine.match(REGEX.MARKDOWN_H3) ||
+          trimmedLine.match(REGEX.TWO_COLUMN_MARKER) ||
+          trimmedLine === '---') {
+        // Exit speaker notes mode, process this line normally
+        inSpeakerNotes = false;
+      } else {
+        // Continue capturing speaker notes
+        if (currentSlide) {
+          currentSlide.notes += trimmedLine + '\n';
+        }
+        continue;
+      }
+    }
+
     // ========================================================================
     // TWO-COLUMN LAYOUT DETECTION
     // ========================================================================
@@ -844,7 +911,7 @@ function parseDocument(text) {
 /**
  * Processes the data for the title slide.
  * @param {Presentation} presentation - The presentation to add the slide to
- * @param {Object} slideData - Slide data containing title and subtitle
+ * @param {Object} slideData - Slide data containing title, subtitle, and notes
  */
 function processTitleSlide(presentation, slideData) {
     const title = slideData.title || "Untitled Presentation";
@@ -875,12 +942,17 @@ function processTitleSlide(presentation, slideData) {
       subtitleBox.getText().getTextStyle().setFontSize(LAYOUT.TITLE_SUBTITLE.FONT_SIZE);
       subtitleBox.getText().getParagraphStyle().setParagraphAlignment(SlidesApp.ParagraphAlignment.CENTER);
     }
+
+    // Add speaker notes if present
+    if (slideData.notes) {
+      setSpeakerNotes(slide, slideData.notes);
+    }
 }
 
 /**
  * Processes a content slide with text, images, and videos.
  * @param {Presentation} presentation - The presentation to add the slide to
- * @param {Object} slideData - Slide data containing headline, subtitle, bullets, images, videos
+ * @param {Object} slideData - Slide data containing headline, subtitle, bullets, images, videos, and notes
  */
 function processContentSlide(presentation, slideData) {
     const headline = slideData.headline || 'Untitled Slide';
@@ -959,12 +1031,17 @@ function processContentSlide(presentation, slideData) {
       bodyBox.getText().getTextStyle().setFontSize(bulletFontSize);
       bodyBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
     }
+
+    // Add speaker notes if present
+    if (slideData.notes) {
+      setSpeakerNotes(slide, slideData.notes);
+    }
 }
 
 /**
  * Processes a two-column layout slide.
  * @param {Presentation} presentation - The presentation to add the slide to
- * @param {Object} slideData - Slide data with left/right content, images, and videos
+ * @param {Object} slideData - Slide data with left/right content, images, videos, and notes
  */
 function processTwoColumnSlide(presentation, slideData) {
     const headline = slideData.headline || 'Untitled Slide';
@@ -1082,5 +1159,10 @@ function processTwoColumnSlide(presentation, slideData) {
         LAYOUT.TWO_COLUMN.ERROR_FONT_SIZE
       );
     });
+
+    // Add speaker notes if present
+    if (slideData.notes) {
+      setSpeakerNotes(slide, slideData.notes);
+    }
 }
 

@@ -1,5 +1,7 @@
 # Slidemaker Formatting Test
 
+**Speaker Notes:** This is the title slide. Welcome everyone to the slidemaker test presentation.
+
 ## Test 1: Basic H2 with Subtitle
 ### This is a subtitle
 
@@ -7,11 +9,15 @@
 * Second bullet point
 * Third bullet point
 
+**Teaching Notes:** This slide demonstrates the basic H2 with H3 subtitle format. The subtitle should appear in italic below the heading.
+
 ## Test 2: H2 without Subtitle
 
 * Just a headline
 * With some bullets
 * No subtitle here
+
+**Notes:** Simple slide with no subtitle. Notice how bullets start closer to the headline when there's no subtitle.
 
 ## Test 3: H2 with H3 Subtitle
 ### H3 should become subtitle
@@ -43,6 +49,10 @@
 * This is a very long bullet point that should test the text wrapping capabilities
 * Another short one
 
+**Speaker Notes:** This slide tests text wrapping in both the headline and bullet points.
+Make sure to emphasize that long text should wrap properly.
+This is a multi-line note to test that multi-line notes work correctly.
+
 Two-Column: Basic Two Column
 
 Left:
@@ -66,6 +76,8 @@ Right:
 * Right bullet one
 * Right bullet two
 * Right bullet three
+
+**Speaker Notes:** This two-column slide demonstrates how bullets can be distributed between left and right columns. Make sure both sides are balanced visually.
 
 Two-Column: Asymmetric Content
 
