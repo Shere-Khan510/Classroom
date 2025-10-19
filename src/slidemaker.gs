@@ -9,8 +9,364 @@ function onOpen() {
     .addToUi();
 }
 
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/** @constant {Object} Layout constants for slide dimensions and positioning */
+const LAYOUT = {
+  // Title Slide
+  TITLE: {
+    X: 50,
+    Y: 100,
+    WIDTH: 622,
+    HEIGHT: 100,
+    FONT_SIZE: 44
+  },
+  TITLE_SUBTITLE: {
+    X: 50,
+    Y: 200,
+    WIDTH: 622,
+    HEIGHT: 100,
+    FONT_SIZE: 28
+  },
+
+  // Content Slide
+  HEADLINE: {
+    X: 50,
+    Y: 30,
+    WIDTH: 450,
+    HEIGHT: 70,           // Increased from 50 to accommodate text wrapping
+    FONT_SIZE: 32
+  },
+  SUBTITLE: {
+    X: 50,
+    Y: 110,              // Increased from 85 for better spacing after headline
+    WIDTH: 450,
+    HEIGHT: 40,          // Increased from 35 for better spacing
+    FONT_SIZE: 24
+  },
+  BULLETS: {
+    X: 50,
+    START_Y_WITH_SUBTITLE: 160,    // Adjusted from 125 to account for new spacing
+    START_Y_NO_SUBTITLE: 110,      // Adjusted from 95 to account for taller headline
+    WIDTH_WITH_MEDIA: 380,
+    WIDTH_NO_MEDIA: 450,
+    HEIGHT: 300,
+    FONT_SIZE_WITH_MEDIA: 18,
+    FONT_SIZE_NO_MEDIA: 20
+  },
+
+  // Media Elements
+  MEDIA: {
+    START_Y: 100,
+    LEFT: 450,
+    WIDTH: 250,
+    HEIGHT: 200,
+    VERTICAL_SPACING: 10,
+    ERROR_HEIGHT: 60,
+    ERROR_FONT_SIZE: 9
+  },
+
+  // Two-Column Layout
+  TWO_COLUMN: {
+    HEADLINE_X: 50,
+    HEADLINE_Y: 30,
+    HEADLINE_WIDTH: 622,
+    HEADLINE_HEIGHT: 50,
+    HEADLINE_FONT_SIZE: 32,
+
+    COLUMN_WIDTH: 286,
+    LEFT_COLUMN_X: 50,
+    RIGHT_COLUMN_X: 386,
+    CONTENT_START_Y_WITH_HEADLINE: 100,
+    CONTENT_START_Y_NO_HEADLINE: 50,
+    CONTENT_HEIGHT: 150,
+    CONTENT_FONT_SIZE: 16,
+
+    MEDIA_HEIGHT: 90,
+    MEDIA_SPACING: 100,
+    MEDIA_OFFSET: 160,
+    ERROR_HEIGHT: 30,
+    ERROR_FONT_SIZE: 10
+  }
+};
+
+/** @constant {Object} Regular expressions for parsing markdown and content */
+const REGEX = {
+  GOOGLE_DOC_ID: /document\/d\/([a-zA-Z0-9_-]+)/,
+  GOOGLE_DRIVE_FILE_ID: /\/file\/d\/([a-zA-Z0-9_-]+)/,
+  GOOGLE_DRIVE_OPEN_ID: /[?&]id=([a-zA-Z0-9_-]+)/,
+  YOUTUBE_URL: /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/i,
+  IMAGE_URL: /^https?:\/\//i,
+  GDRIVE_PREFIX: /^GDRIVE:/i,
+
+  MARKDOWN_H1: /^#\s+(.+)$/,
+  MARKDOWN_H2: /^#{2}\s+(.+)$/,
+  MARKDOWN_H3: /^#{3}\s+(.+)$/,
+  MARKDOWN_BULLET: /^[\*\-•]\s+(.+)$/,
+  MARKDOWN_IMAGE: /^!\[([^\]]*)\]\(([^)]+)\)$/,
+
+  TWO_COLUMN_MARKER: /^two[\s-]?column/i,
+  TWO_COLUMN_HEADLINE: /^two[\s-]?column[\s:]+(.+)$/i,
+  LEFT_COLUMN: /^left[\s:]?/i,
+  LEFT_COLUMN_CONTENT: /^left[\s:]+(.+)$/i,
+  RIGHT_COLUMN: /^right[\s:]?/i,
+  RIGHT_COLUMN_CONTENT: /^right[\s:]+(.+)$/i,
+
+  VIDEO_SIMPLE: /^video[\s:]+(.+)$/i,
+  IMAGE_SIMPLE: /^image[\s:]+(.+)$/i
+};
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
 /**
- * Shows a dialog to input Google Doc URL.
+ * @typedef {Object} TitleSlideData
+ * @property {boolean} isTitle - Always true for title slides
+ * @property {string} title - The main title text
+ * @property {string} subtitle - Optional subtitle text
+ */
+
+/**
+ * @typedef {Object} ContentSlideData
+ * @property {boolean} isTitle - Always false for content slides
+ * @property {string} headline - The slide headline
+ * @property {string} subtitle - Optional subtitle
+ * @property {string[]} bullets - Array of bullet point text
+ * @property {string[]} images - Array of image URLs (http/https or GDRIVE:fileId)
+ * @property {string[]} videos - Array of YouTube video URLs
+ */
+
+/**
+ * @typedef {Object} TwoColumnSlideData
+ * @property {boolean} isTitle - Always false for two-column slides
+ * @property {string} layout - Always 'two-column'
+ * @property {string} headline - The slide headline
+ * @property {string[]} leftContent - Left column content lines
+ * @property {string[]} rightContent - Right column content lines
+ * @property {string[]} leftImages - Left column image URLs
+ * @property {string[]} rightImages - Right column image URLs
+ * @property {string[]} leftVideos - Left column video URLs
+ * @property {string[]} rightVideos - Right column video URLs
+ */
+
+// ============================================================================
+// HELPER VALIDATION FUNCTIONS
+// ============================================================================
+
+/**
+ * Validates if a string is a valid YouTube URL.
+ * Supports both youtube.com and youtu.be URLs.
+ *
+ * @param {string} url - The URL to validate
+ * @return {boolean} True if valid YouTube URL, false otherwise
+ *
+ * @example
+ * isValidYouTubeUrl('https://www.youtube.com/watch?v=abc123') // returns true
+ * isValidYouTubeUrl('https://youtu.be/abc123') // returns true
+ * isValidYouTubeUrl('https://vimeo.com/123456') // returns false
+ */
+function isValidYouTubeUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+  return REGEX.YOUTUBE_URL.test(url.trim());
+}
+
+/**
+ * Validates if a string is a valid image URL.
+ * Accepts both standard HTTP/HTTPS URLs and Google Drive file references.
+ *
+ * @param {string} url - The URL to validate
+ * @return {boolean} True if valid image URL, false otherwise
+ *
+ * @example
+ * isValidImageUrl('https://example.com/image.jpg') // returns true
+ * isValidImageUrl('GDRIVE:abc123xyz') // returns true
+ * isValidImageUrl('https://drive.google.com/file/d/abc123/view') // returns true
+ * isValidImageUrl('ftp://example.com/image.jpg') // returns false
+ */
+function isValidImageUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+  const trimmedUrl = url.trim();
+
+  // Check if it's a standard HTTP/HTTPS URL
+  if (REGEX.IMAGE_URL.test(trimmedUrl)) {
+    return true;
+  }
+
+  // Check if it's a GDRIVE: reference or can extract a Drive file ID
+  if (REGEX.GDRIVE_PREFIX.test(trimmedUrl) || extractDriveFileId(trimmedUrl)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extracts the Google Doc ID from a URL.
+ * @param {string} url - The Google Docs URL
+ * @return {string|null} The document ID if found, null otherwise
+ */
+function extractDocIdFromUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+  try {
+    const match = url.match(REGEX.GOOGLE_DOC_ID);
+    return match ? match[1] : null;
+  } catch (e) {
+    Logger.log('Error extracting doc ID from URL: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Extracts the Google Drive file ID from a URL or GDRIVE: reference.
+ * Supports multiple Google Drive URL formats.
+ *
+ * @param {string} urlOrRef - The Google Drive URL or GDRIVE:fileId reference
+ * @return {string|null} The file ID if found, null otherwise
+ *
+ * @example
+ * extractDriveFileId('GDRIVE:abc123') // returns 'abc123'
+ * extractDriveFileId('https://drive.google.com/file/d/abc123/view') // returns 'abc123'
+ * extractDriveFileId('https://drive.google.com/open?id=abc123') // returns 'abc123'
+ */
+function extractDriveFileId(urlOrRef) {
+  if (!urlOrRef || typeof urlOrRef !== 'string') {
+    return null;
+  }
+
+  try {
+    const trimmed = urlOrRef.trim();
+
+    // Check for GDRIVE:fileId format
+    if (trimmed.startsWith('GDRIVE:')) {
+      return trimmed.replace('GDRIVE:', '').trim();
+    }
+
+    // Check for /file/d/fileId/ format
+    let match = trimmed.match(REGEX.GOOGLE_DRIVE_FILE_ID);
+    if (match) {
+      return match[1];
+    }
+
+    // Check for ?id=fileId or &id=fileId format
+    match = trimmed.match(REGEX.GOOGLE_DRIVE_OPEN_ID);
+    if (match) {
+      return match[1];
+    }
+
+    return null;
+  } catch (e) {
+    Logger.log('Error extracting Drive file ID from URL: ' + e.message);
+    return null;
+  }
+}
+
+/**
+ * Creates an initialized slide data object with default values.
+ * @param {string} type - Type of slide: 'title', 'content', or 'two-column'
+ * @param {Object} initialData - Initial data to merge with defaults
+ * @return {Object} Initialized slide data object
+ */
+function createSlideDataObject(type, initialData = {}) {
+  const defaults = {
+    title: { isTitle: true, title: '', subtitle: '' },
+    content: { isTitle: false, headline: '', subtitle: '', bullets: [], images: [], videos: [] },
+    'two-column': {
+      isTitle: false,
+      layout: 'two-column',
+      headline: '',
+      leftContent: [],
+      rightContent: [],
+      leftImages: [],
+      rightImages: [],
+      leftVideos: [],
+      rightVideos: []
+    }
+  };
+
+  return Object.assign({}, defaults[type] || defaults.content, initialData);
+}
+
+/**
+ * Inserts an image into a slide with error handling.
+ * Supports standard URLs and Google Drive files (via URL or GDRIVE: reference).
+ *
+ * @param {Slide} slide - The slide to insert the image into
+ * @param {string} imageUrl - The image URL (http/https, full Drive URL, or GDRIVE:fileId)
+ * @param {number} x - X position
+ * @param {number} y - Y position
+ * @param {number} width - Image width
+ * @param {number} height - Image height
+ * @param {number} errorFontSize - Font size for error messages
+ * @return {number} The vertical offset used (height + spacing or error box height)
+ */
+function insertImageWithErrorHandling(slide, imageUrl, x, y, width, height, errorFontSize = 9) {
+  try {
+    // Try to extract Google Drive file ID
+    const driveFileId = extractDriveFileId(imageUrl);
+
+    if (driveFileId) {
+      // It's a Google Drive file - fetch and insert as blob
+      const file = DriveApp.getFileById(driveFileId);
+      const blob = file.getBlob();
+      slide.insertImage(blob, x, y, width, height);
+    } else {
+      // It's a standard URL
+      slide.insertImage(imageUrl, x, y, width, height);
+    }
+    return height + LAYOUT.MEDIA.VERTICAL_SPACING;
+  } catch (e) {
+    Logger.log('Error inserting image ' + imageUrl + ': ' + e.message);
+    const errorHeight = height > 60 ? 60 : 30;
+    const errorBox = slide.insertTextBox('[Image Error: ' + e.message + ']', x, y, width, errorHeight);
+    errorBox.getText().getTextStyle().setFontSize(errorFontSize).setItalic(true);
+    return errorHeight + 10;
+  }
+}
+
+/**
+ * Inserts a video into a slide with error handling.
+ * @param {Slide} slide - The slide to insert the video into
+ * @param {string} videoUrl - The YouTube video URL
+ * @param {number} x - X position
+ * @param {number} y - Y position
+ * @param {number} width - Video width
+ * @param {number} height - Video height
+ * @param {number} errorFontSize - Font size for error messages
+ * @return {number} The vertical offset used (height + spacing or error box height)
+ */
+function insertVideoWithErrorHandling(slide, videoUrl, x, y, width, height, errorFontSize = 9) {
+  try {
+    slide.insertVideo(videoUrl, x, y, width, height);
+    return height + LAYOUT.MEDIA.VERTICAL_SPACING;
+  } catch (e) {
+    Logger.log('Error inserting video ' + videoUrl + ': ' + e.message);
+    const errorHeight = height > 60 ? 60 : 30;
+    const errorBox = slide.insertTextBox('[Video Error: ' + e.message + ']', x, y, width, errorHeight);
+    errorBox.getText().getTextStyle().setFontSize(errorFontSize).setItalic(true);
+    return errorHeight + 10;
+  }
+}
+
+// ============================================================================
+// UI FUNCTIONS
+// ============================================================================
+
+/**
+ * Shows a dialog prompting the user to input a Google Doc URL.
+ * When the user confirms, processes the document and creates slides.
+ * Automatically clears existing slides before creating new ones.
+ *
+ * @example
+ * // Called from the Slidemaker menu: Slidemaker > Create Slides from Google Doc
  */
 function showDocUrlDialog() {
   const ui = SlidesApp.getUi();
@@ -30,31 +386,52 @@ function showDocUrlDialog() {
 
 /**
  * Shows a dialog to input or paste text content.
+ * Displays a modal dialog with a text area for markdown input.
+ *
+ * @example
+ * // Called from the Slidemaker menu: Slidemaker > Create Slides from Text
  */
 function showTextInputDialog() {
-  const htmlOutput = HtmlService.createHtmlOutput(
-    '<textarea id="content" style="width:100%;height:400px;font-family:monospace;"></textarea>' +
-    '<br><br>' +
-    '<label><input type="checkbox" id="clearSlides" checked> Clear existing slides</label>' +
-    '<br><br>' +
-    '<button onclick="google.script.host.close()">Cancel</button> ' +
-    '<button onclick="submitText()">Create Slides</button>' +
-    '<script>' +
-    'function submitText() {' +
-    '  const content = document.getElementById("content").value;' +
-    '  const clearSlides = document.getElementById("clearSlides").checked;' +
-    '  google.script.run.withSuccessHandler(google.script.host.close).processTextContent(content, clearSlides);' +
-    '}' +
-    '</script>'
-  )
-    .setWidth(600)
-    .setHeight(550);
-  
-  SlidesApp.getUi().showModalDialog(htmlOutput, 'Create Slides from Text');
+  try {
+    const htmlOutput = HtmlService.createHtmlOutput(
+      '<textarea id="content" style="width:100%;height:400px;font-family:monospace;"></textarea>' +
+      '<br><br>' +
+      '<label><input type="checkbox" id="clearSlides" checked> Clear existing slides</label>' +
+      '<br><br>' +
+      '<button onclick="google.script.host.close()">Cancel</button> ' +
+      '<button onclick="submitText()">Create Slides</button>' +
+      '<script>' +
+      'function submitText() {' +
+      '  const content = document.getElementById("content").value;' +
+      '  const clearSlides = document.getElementById("clearSlides").checked;' +
+      '  google.script.run' +
+      '    .withSuccessHandler(google.script.host.close)' +
+      '    .withFailureHandler(function(error) { alert("Error: " + error.message); })' +
+      '    .processTextContent(content, clearSlides);' +
+      '}' +
+      '</script>'
+    )
+      .setWidth(600)
+      .setHeight(550);
+
+    SlidesApp.getUi().showModalDialog(htmlOutput, 'Create Slides from Text');
+  } catch (e) {
+    Logger.log('Error showing text input dialog: ' + e.message);
+    SlidesApp.getUi().alert('Error', 'Failed to show input dialog: ' + e.message, SlidesApp.getUi().ButtonSet.OK);
+  }
 }
 
 /**
  * Processes a Google Doc URL and creates slides from its content.
+ * Validates the URL, checks access permissions, and extracts text content.
+ *
+ * @param {string} docUrl - The Google Docs URL to process
+ * @param {boolean} clearExisting - Whether to clear existing slides before creating new ones
+ *
+ * @throws {Error} Shows alert if URL is invalid or document cannot be accessed
+ *
+ * @example
+ * processGoogleDoc('https://docs.google.com/document/d/abc123/edit', true)
  */
 function processGoogleDoc(docUrl, clearExisting) {
   const ui = SlidesApp.getUi();
@@ -86,7 +463,32 @@ function processGoogleDoc(docUrl, clearExisting) {
 }
 
 /**
- * Processes text content and creates slides.
+ * Processes markdown-formatted text content and creates slides.
+ * Parses the text for slide structure and creates slides accordingly.
+ *
+ * @param {string} outlineText - Markdown-formatted text containing slide content
+ * @param {boolean} clearExisting - Whether to clear existing slides first
+ *
+ * @throws {Error} Shows alert if content is empty or no valid slides found
+ *
+ * Supported markdown format:
+ * - # Title (creates title slide if first, otherwise content slide)
+ * - ## Heading (creates new content slide)
+ * - ### Subtitle (adds subtitle to previous ## heading)
+ * - * Bullet point
+ * - Image: URL or GDRIVE:fileId
+ * - Video: YouTube URL
+ * - Two-Column: Headline (creates two-column layout)
+ * - Left: / Right: (column markers in two-column layout)
+ *
+ * @example
+ * const markdown = `
+ * # My Presentation
+ * ## First Slide
+ * * Bullet point 1
+ * * Bullet point 2
+ * `;
+ * processTextContent(markdown, true);
  */
 function processTextContent(outlineText, clearExisting) {
   const ui = SlidesApp.getUi();
@@ -142,176 +544,259 @@ function processTextContent(outlineText, clearExisting) {
 }
 
 /**
- * Parses document text and returns an array of slide data objects.
+ * Parses markdown-formatted document text and returns an array of slide data objects.
+ * Supports multiple slide types, layouts, and media elements.
+ *
+ * @param {string} text - The markdown-formatted text to parse
+ * @return {Array<TitleSlideData|ContentSlideData|TwoColumnSlideData>} Array of slide data objects
+ *
+ * Parsing rules:
+ * 1. First # heading or plain text becomes title slide
+ * 2. ## creates new content slide with heading
+ * 3. ### after ## becomes subtitle; otherwise creates new slide
+ * 4. * or - creates bullet points
+ * 5. Image: URL or ![alt](URL) inserts images
+ * 6. Video: URL inserts YouTube videos
+ * 7. Two-Column: Headline creates two-column layout
+ * 8. Left: / Right: marks column content in two-column layout
+ *
+ * @example
+ * const slides = parseDocument('# Title\n## Slide 1\n* Bullet\n* Another');
+ * // Returns: [
+ * //   { isTitle: true, title: 'Title', subtitle: '' },
+ * //   { isTitle: false, headline: 'Slide 1', bullets: ['Bullet', 'Another'], ... }
+ * // ]
  */
 function parseDocument(text) {
   const lines = text.split('\n');
   const slides = [];
   let currentSlide = null;
-  let isFirstSlide = true;
-  let inLeftColumn = false;
-  let inRightColumn = false;
-  let lastHeadingWasH2 = false;
-  
+
+  // State tracking variables
+  let isFirstSlide = true;          // True until we create the first slide
+  let inLeftColumn = false;          // Track if we're in left column of two-column layout
+  let inRightColumn = false;         // Track if we're in right column of two-column layout
+  let lastHeadingCanHaveSubtitle = false;  // Track if previous heading was H1/H2 (affects H3 interpretation)
+
+  // Process each line of the document
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmedLine = line.trim();
-    
+
+    // Skip empty lines
     if (trimmedLine.length === 0) {
       continue;
     }
     
-    // Check for two-column layout marker
-    if (trimmedLine.toLowerCase().match(/^two[\s-]?column/i)) {
+    // ========================================================================
+    // TWO-COLUMN LAYOUT DETECTION
+    // ========================================================================
+    // Check for two-column layout marker (e.g., "Two-Column: My Heading")
+    if (trimmedLine.match(REGEX.TWO_COLUMN_MARKER)) {
+      // Save current slide before starting new two-column slide
       if (currentSlide && !slides.includes(currentSlide)) slides.push(currentSlide);
-      const headlineMatch = trimmedLine.match(/^two[\s-]?column[\s:]+(.+)$/i);
+
+      // Extract optional headline from marker line
+      const headlineMatch = trimmedLine.match(REGEX.TWO_COLUMN_HEADLINE);
       const headline = headlineMatch ? headlineMatch[1].trim() : '';
-      currentSlide = { 
-        isTitle: false, 
-        layout: 'two-column', 
-        headline: headline, 
-        leftContent: [], 
-        rightContent: [], 
-        leftImages: [], 
+
+      // Create new two-column slide with separate content arrays for each column
+      currentSlide = {
+        isTitle: false,
+        layout: 'two-column',
+        headline: headline,
+        leftContent: [],
+        rightContent: [],
+        leftImages: [],
         rightImages: [],
         leftVideos: [],
         rightVideos: []
       };
+
+      // Reset state flags
       isFirstSlide = false;
       inLeftColumn = false;
       inRightColumn = false;
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = false;
       continue;
     }
     
-    // Check for Left/Right column markers
+    // Column marker handling within two-column layouts
     if (currentSlide && currentSlide.layout === 'two-column') {
-      if (trimmedLine.toLowerCase().match(/^left[\s:]?/i)) {
+      // Left column marker (e.g., "Left:" or "Left: content")
+      if (trimmedLine.match(REGEX.LEFT_COLUMN)) {
         inLeftColumn = true;
         inRightColumn = false;
-        const match = trimmedLine.match(/^left[\s:]+(.+)$/i);
+        const match = trimmedLine.match(REGEX.LEFT_COLUMN_CONTENT);
         if (match && match[1].trim()) {
           currentSlide.leftContent.push(match[1].trim());
         }
         continue;
       }
-      if (trimmedLine.toLowerCase().match(/^right[\s:]?/i)) {
+      // Right column marker (e.g., "Right:" or "Right: content")
+      if (trimmedLine.match(REGEX.RIGHT_COLUMN)) {
         inLeftColumn = false;
         inRightColumn = true;
-        const match = trimmedLine.match(/^right[\s:]+(.+)$/i);
+        const match = trimmedLine.match(REGEX.RIGHT_COLUMN_CONTENT);
         if (match && match[1].trim()) {
           currentSlide.rightContent.push(match[1].trim());
         }
         continue;
       }
     }
-    
-    // Check for video syntax
-    const simpleVideoMatch = trimmedLine.match(/^video[\s:]+(.+)$/i);
-    
+
+    // ========================================================================
+    // MEDIA ELEMENTS (VIDEOS AND IMAGES)
+    // ========================================================================
+
+    // Video detection (format: "Video: https://youtube.com/...")
+    const simpleVideoMatch = trimmedLine.match(REGEX.VIDEO_SIMPLE);
     if (simpleVideoMatch) {
       const videoUrl = simpleVideoMatch[1].trim();
-      
-      if (!videoUrl.match(/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/i)) {
+
+      // Only YouTube videos are supported
+      if (!isValidYouTubeUrl(videoUrl)) {
         Logger.log('Invalid video URL (must be YouTube): ' + videoUrl);
         continue;
       }
-      
+
+      // Add video to appropriate slide/column
       if (!currentSlide) {
-        currentSlide = { isTitle: false, headline: 'Untitled Slide', subtitle: '', bullets: [], videos: [videoUrl], images: [] };
+        // Create new slide if none exists
+        currentSlide = createSlideDataObject('content', { headline: 'Untitled Slide', videos: [videoUrl] });
         isFirstSlide = false;
       } else if (currentSlide.layout === 'two-column') {
+        // Add to active column in two-column layout
         if (inRightColumn) {
           currentSlide.rightVideos.push(videoUrl);
         } else {
           currentSlide.leftVideos.push(videoUrl);
         }
       } else {
+        // Add to regular content slide
         if (!currentSlide.videos) currentSlide.videos = [];
         currentSlide.videos.push(videoUrl);
       }
       continue;
     }
-    
-    // Check for image syntax
-    const markdownImageMatch = trimmedLine.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-    const simpleImageMatch = trimmedLine.match(/^image[\s:]+(.+)$/i);
-    
+
+    // Image detection (formats: "Image: URL" or markdown "![alt](URL)")
+    const markdownImageMatch = trimmedLine.match(REGEX.MARKDOWN_IMAGE);
+    const simpleImageMatch = trimmedLine.match(REGEX.IMAGE_SIMPLE);
     if (markdownImageMatch || simpleImageMatch) {
       const imageUrl = markdownImageMatch ? markdownImageMatch[2] : simpleImageMatch[1];
       const imageAlt = markdownImageMatch ? markdownImageMatch[1] : '';
-      
-      if (!imageUrl.match(/^https?:\/\//i) && !imageUrl.match(/^GDRIVE:/i)) {
+
+      // Validate URL format (http/https or GDRIVE:fileId)
+      if (!isValidImageUrl(imageUrl)) {
         Logger.log('Invalid image URL: ' + imageUrl);
         continue;
       }
-      
+
+      // Add image to appropriate slide/column
       if (!currentSlide) {
-        currentSlide = { isTitle: false, headline: imageAlt || 'Untitled Slide', subtitle: '', bullets: [], images: [imageUrl], videos: [] };
+        // Create new slide if none exists, use alt text as headline
+        currentSlide = createSlideDataObject('content', { headline: imageAlt || 'Untitled Slide', images: [imageUrl] });
         isFirstSlide = false;
       } else if (currentSlide.layout === 'two-column') {
+        // Add to active column in two-column layout
         if (inRightColumn) {
           currentSlide.rightImages.push(imageUrl);
         } else {
           currentSlide.leftImages.push(imageUrl);
         }
       } else {
+        // Add to regular content slide
         if (!currentSlide.images) currentSlide.images = [];
         currentSlide.images.push(imageUrl);
       }
       continue;
     }
     
-    // Check for markdown H1
-    if (trimmedLine.match(/^#\s+(.+)$/)) {
-      const title = trimmedLine.replace(/^#\s+/, '');
+    // ========================================================================
+    // MARKDOWN HEADINGS AND TEXT CONTENT
+    // ========================================================================
+
+    // H1 heading (# Title) - Creates title slide if first, otherwise content slide
+    // H1 ALWAYS exits two-column mode (it's a major section break)
+    const h1Match = trimmedLine.match(REGEX.MARKDOWN_H1);
+    if (h1Match) {
+      const title = h1Match[1];
       if (isFirstSlide) {
-        currentSlide = { isTitle: true, title: title, subtitle: '' };
+        // First H1 creates a title slide
+        currentSlide = createSlideDataObject('title', { title: title });
         slides.push(currentSlide);
         isFirstSlide = false;
       } else {
+        // Subsequent H1s create content slides
         if (currentSlide && !slides.includes(currentSlide)) slides.push(currentSlide);
-        currentSlide = { isTitle: false, headline: title, subtitle: '', bullets: [], images: [], videos: [] };
+        currentSlide = createSlideDataObject('content', { headline: title });
       }
       inLeftColumn = false;
       inRightColumn = false;
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = true;  // H1 can have H3 subtitle
       continue;
     }
-    
-    // Check for markdown H2
-    if (trimmedLine.match(/^#{2}\s+(.+)$/)) {
+
+    // H2 heading (## Heading)
+    // H2 ALWAYS creates a new content slide and exits two-column mode
+    // It's a major section break
+    const h2Match = trimmedLine.match(REGEX.MARKDOWN_H2);
+    if (h2Match) {
+      const heading = h2Match[1];
+
+      // H2 always creates new slide, even in two-column mode
       if (currentSlide && !slides.includes(currentSlide)) slides.push(currentSlide);
-      const heading = trimmedLine.replace(/^#{2}\s+/, '');
-      currentSlide = { isTitle: false, headline: heading, subtitle: '', bullets: [], images: [], videos: [] };
+      currentSlide = createSlideDataObject('content', { headline: heading });
       isFirstSlide = false;
       inLeftColumn = false;
       inRightColumn = false;
-      lastHeadingWasH2 = true;
+      lastHeadingCanHaveSubtitle = true;  // H2 can have H3 subtitle
       continue;
     }
-    
-    // Check for markdown H3
-    if (trimmedLine.match(/^#{3}\s+(.+)$/)) {
-      const subtitleText = trimmedLine.replace(/^#{3}\s+/, '');
-      if (currentSlide && lastHeadingWasH2 && !currentSlide.subtitle) {
+
+    // H3 heading (### Subtitle)
+    // In active column: treat as column content
+    // After H1/H2: becomes subtitle
+    // Otherwise: creates new slide
+    const h3Match = trimmedLine.match(REGEX.MARKDOWN_H3);
+    if (h3Match) {
+      const subtitleText = h3Match[1];
+
+      // If actively in a left/right column, add as content to that column
+      if (currentSlide && currentSlide.layout === 'two-column' && (inLeftColumn || inRightColumn)) {
+        if (inRightColumn) {
+          currentSlide.rightContent.push('### ' + subtitleText);
+        } else {
+          currentSlide.leftContent.push('### ' + subtitleText);
+        }
+        lastHeadingCanHaveSubtitle = false;
+        continue;
+      }
+
+      // Not in active column: check if it should be a subtitle or new slide
+      // H3 becomes subtitle if it follows H1 or H2 and slide doesn't have subtitle yet
+      if (currentSlide && lastHeadingCanHaveSubtitle && !currentSlide.subtitle) {
         currentSlide.subtitle = subtitleText;
       } else {
+        // Otherwise create a new content slide (exits two-column mode if needed)
         if (currentSlide && !slides.includes(currentSlide)) slides.push(currentSlide);
-        currentSlide = { isTitle: false, headline: subtitleText, subtitle: '', bullets: [], images: [], videos: [] };
+        currentSlide = createSlideDataObject('content', { headline: subtitleText });
         isFirstSlide = false;
       }
       inLeftColumn = false;
       inRightColumn = false;
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = false;  // H3 itself cannot have subtitle
       continue;
     }
-    
-    // Check for markdown bullets
-    if (trimmedLine.match(/^[\*\-•]\s+(.+)$/)) {
-      const bulletText = trimmedLine.replace(/^[\*\-•]\s+/, '');
+
+    // Bullet points (* or - or •)
+    const bulletMatch = trimmedLine.match(REGEX.MARKDOWN_BULLET);
+    if (bulletMatch) {
+      const bulletText = bulletMatch[1];
       if (!currentSlide) {
-        currentSlide = { isTitle: false, headline: 'Untitled Slide', subtitle: '', bullets: [bulletText], images: [], videos: [] };
+        // Create slide if none exists
+        currentSlide = createSlideDataObject('content', { headline: 'Untitled Slide', bullets: [bulletText] });
         isFirstSlide = false;
       } else if (currentSlide.layout === 'two-column') {
         if (inRightColumn) {
@@ -322,7 +807,7 @@ function parseDocument(text) {
       } else if (currentSlide.bullets) {
         currentSlide.bullets.push(bulletText);
       }
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = false;  // Bullets end heading context
       continue;
     }
     
@@ -335,16 +820,16 @@ function parseDocument(text) {
       } else if (!currentSlide.headline) {
         currentSlide.headline = trimmedLine;
       }
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = false;
       continue;
     }
-    
+
     // First line becomes title
     if (isFirstSlide && !currentSlide) {
-      currentSlide = { isTitle: true, title: trimmedLine, subtitle: '' };
+      currentSlide = createSlideDataObject('title', { title: trimmedLine });
       slides.push(currentSlide);
       isFirstSlide = false;
-      lastHeadingWasH2 = false;
+      lastHeadingCanHaveSubtitle = false;
       continue;
     }
   }
@@ -358,6 +843,8 @@ function parseDocument(text) {
 
 /**
  * Processes the data for the title slide.
+ * @param {Presentation} presentation - The presentation to add the slide to
+ * @param {Object} slideData - Slide data containing title and subtitle
  */
 function processTitleSlide(presentation, slideData) {
     const title = slideData.title || "Untitled Presentation";
@@ -365,19 +852,35 @@ function processTitleSlide(presentation, slideData) {
 
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
 
-    const titleBox = slide.insertTextBox(title, 50, 100, 622, 100);
-    titleBox.getText().getTextStyle().setFontSize(44).setBold(true);
+    // Add centered title
+    const titleBox = slide.insertTextBox(
+      title,
+      LAYOUT.TITLE.X,
+      LAYOUT.TITLE.Y,
+      LAYOUT.TITLE.WIDTH,
+      LAYOUT.TITLE.HEIGHT
+    );
+    titleBox.getText().getTextStyle().setFontSize(LAYOUT.TITLE.FONT_SIZE).setBold(true);
     titleBox.getText().getParagraphStyle().setParagraphAlignment(SlidesApp.ParagraphAlignment.CENTER);
 
+    // Add centered subtitle if present
     if (subtitle) {
-      const subtitleBox = slide.insertTextBox(subtitle, 50, 200, 622, 100);
-      subtitleBox.getText().getTextStyle().setFontSize(28);
+      const subtitleBox = slide.insertTextBox(
+        subtitle,
+        LAYOUT.TITLE_SUBTITLE.X,
+        LAYOUT.TITLE_SUBTITLE.Y,
+        LAYOUT.TITLE_SUBTITLE.WIDTH,
+        LAYOUT.TITLE_SUBTITLE.HEIGHT
+      );
+      subtitleBox.getText().getTextStyle().setFontSize(LAYOUT.TITLE_SUBTITLE.FONT_SIZE);
       subtitleBox.getText().getParagraphStyle().setParagraphAlignment(SlidesApp.ParagraphAlignment.CENTER);
     }
 }
 
 /**
  * Processes a content slide with text, images, and videos.
+ * @param {Presentation} presentation - The presentation to add the slide to
+ * @param {Object} slideData - Slide data containing headline, subtitle, bullets, images, videos
  */
 function processContentSlide(presentation, slideData) {
     const headline = slideData.headline || 'Untitled Slide';
@@ -388,68 +891,80 @@ function processContentSlide(presentation, slideData) {
 
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
 
-    const headlineBox = slide.insertTextBox(headline, 50, 30, 450, 50);
-    headlineBox.getText().getTextStyle().setFontSize(32).setBold(true);
+    // Add headline
+    const headlineBox = slide.insertTextBox(
+      headline,
+      LAYOUT.HEADLINE.X,
+      LAYOUT.HEADLINE.Y,
+      LAYOUT.HEADLINE.WIDTH,
+      LAYOUT.HEADLINE.HEIGHT
+    );
+    headlineBox.getText().getTextStyle().setFontSize(LAYOUT.HEADLINE.FONT_SIZE).setBold(true);
 
+    // Add subtitle if present
     if (subtitle) {
-      const subtitleBox = slide.insertTextBox(subtitle, 50, 85, 450, 35);
-      subtitleBox.getText().getTextStyle().setFontSize(24).setItalic(true);
+      const subtitleBox = slide.insertTextBox(
+        subtitle,
+        LAYOUT.SUBTITLE.X,
+        LAYOUT.SUBTITLE.Y,
+        LAYOUT.SUBTITLE.WIDTH,
+        LAYOUT.SUBTITLE.HEIGHT
+      );
+      subtitleBox.getText().getTextStyle().setFontSize(LAYOUT.SUBTITLE.FONT_SIZE).setItalic(true);
     }
 
-    const bulletsStartY = subtitle ? 125 : 95;
-    const mediaStartY = 100;
+    const hasMedia = images.length > 0 || videos.length > 0;
+    const bulletsStartY = subtitle ? LAYOUT.BULLETS.START_Y_WITH_SUBTITLE : LAYOUT.BULLETS.START_Y_NO_SUBTITLE;
     let mediaYOffset = 0;
 
-    if (images.length > 0 || videos.length > 0) {
-      const mediaWidth = 250;
-      const mediaHeight = 200;
-      const mediaLeft = 450;
-      
-      images.forEach((imageUrl, index) => {
-        try {
-          if (imageUrl.startsWith('GDRIVE:')) {
-            const fileId = imageUrl.replace('GDRIVE:', '').trim();
-            const file = DriveApp.getFileById(fileId);
-            const blob = file.getBlob();
-            slide.insertImage(blob, mediaLeft, mediaStartY + mediaYOffset, mediaWidth, mediaHeight);
-          } else {
-            slide.insertImage(imageUrl, mediaLeft, mediaStartY + mediaYOffset, mediaWidth, mediaHeight);
-          }
-          mediaYOffset += mediaHeight + 10;
-        } catch (e) {
-          const errorBox = slide.insertTextBox('[Image Error: ' + e.message + ']', mediaLeft, mediaStartY + mediaYOffset, mediaWidth, 60);
-          errorBox.getText().getTextStyle().setFontSize(9).setItalic(true);
-          mediaYOffset += 70;
-        }
+    // Insert media elements (images and videos)
+    if (hasMedia) {
+      images.forEach((imageUrl) => {
+        mediaYOffset += insertImageWithErrorHandling(
+          slide,
+          imageUrl,
+          LAYOUT.MEDIA.LEFT,
+          LAYOUT.MEDIA.START_Y + mediaYOffset,
+          LAYOUT.MEDIA.WIDTH,
+          LAYOUT.MEDIA.HEIGHT,
+          LAYOUT.MEDIA.ERROR_FONT_SIZE
+        );
       });
-      
-      videos.forEach((videoUrl, index) => {
-        try {
-          slide.insertVideo(videoUrl, mediaLeft, mediaStartY + mediaYOffset, mediaWidth, mediaHeight);
-          mediaYOffset += mediaHeight + 10;
-        } catch (e) {
-          const errorBox = slide.insertTextBox('[Video Error: ' + e.message + ']', mediaLeft, mediaStartY + mediaYOffset, mediaWidth, 60);
-          errorBox.getText().getTextStyle().setFontSize(9).setItalic(true);
-          mediaYOffset += 70;
-        }
+
+      videos.forEach((videoUrl) => {
+        mediaYOffset += insertVideoWithErrorHandling(
+          slide,
+          videoUrl,
+          LAYOUT.MEDIA.LEFT,
+          LAYOUT.MEDIA.START_Y + mediaYOffset,
+          LAYOUT.MEDIA.WIDTH,
+          LAYOUT.MEDIA.HEIGHT,
+          LAYOUT.MEDIA.ERROR_FONT_SIZE
+        );
       });
-      
-      if (bulletPoints.length > 0) {
-        const bodyBox = slide.insertTextBox(bulletPoints.join('\n'), 50, bulletsStartY, 380, 300);
-        bodyBox.getText().getTextStyle().setFontSize(18);
-        bodyBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
-      }
-    } else {
-      if (bulletPoints.length > 0) {
-        const bodyBox = slide.insertTextBox(bulletPoints.join('\n'), 50, bulletsStartY, 450, 300);
-        bodyBox.getText().getTextStyle().setFontSize(20);
-        bodyBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
-      }
+    }
+
+    // Add bullet points
+    if (bulletPoints.length > 0) {
+      const bulletWidth = hasMedia ? LAYOUT.BULLETS.WIDTH_WITH_MEDIA : LAYOUT.BULLETS.WIDTH_NO_MEDIA;
+      const bulletFontSize = hasMedia ? LAYOUT.BULLETS.FONT_SIZE_WITH_MEDIA : LAYOUT.BULLETS.FONT_SIZE_NO_MEDIA;
+
+      const bodyBox = slide.insertTextBox(
+        bulletPoints.join('\n'),
+        LAYOUT.BULLETS.X,
+        bulletsStartY,
+        bulletWidth,
+        LAYOUT.BULLETS.HEIGHT
+      );
+      bodyBox.getText().getTextStyle().setFontSize(bulletFontSize);
+      bodyBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
     }
 }
 
 /**
  * Processes a two-column layout slide.
+ * @param {Presentation} presentation - The presentation to add the slide to
+ * @param {Object} slideData - Slide data with left/right content, images, and videos
  */
 function processTwoColumnSlide(presentation, slideData) {
     const headline = slideData.headline || 'Untitled Slide';
@@ -459,107 +974,113 @@ function processTwoColumnSlide(presentation, slideData) {
     const rightImages = slideData.rightImages || [];
     const leftVideos = slideData.leftVideos || [];
     const rightVideos = slideData.rightVideos || [];
-    
+
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
-    
+
+    // Add headline if present
     if (headline) {
-      const headlineBox = slide.insertTextBox(headline, 50, 30, 622, 50);
-      headlineBox.getText().getTextStyle().setFontSize(32).setBold(true);
+      const headlineBox = slide.insertTextBox(
+        headline,
+        LAYOUT.TWO_COLUMN.HEADLINE_X,
+        LAYOUT.TWO_COLUMN.HEADLINE_Y,
+        LAYOUT.TWO_COLUMN.HEADLINE_WIDTH,
+        LAYOUT.TWO_COLUMN.HEADLINE_HEIGHT
+      );
+      headlineBox.getText().getTextStyle().setFontSize(LAYOUT.TWO_COLUMN.HEADLINE_FONT_SIZE).setBold(true);
     }
-    
-    const columnWidth = 286;
-    const leftColumnX = 50;
-    const rightColumnX = 386;
-    const contentStartY = headline ? 100 : 50;
-    
-    const hasBullets = (content) => content.some(line => line.match(/^[\*\-•]\s/));
+
+    const contentStartY = headline ?
+      LAYOUT.TWO_COLUMN.CONTENT_START_Y_WITH_HEADLINE :
+      LAYOUT.TWO_COLUMN.CONTENT_START_Y_NO_HEADLINE;
+
+    // Helper functions for bullet processing
+    const hasBullets = (content) => content.some(line => REGEX.MARKDOWN_BULLET.test(line));
     const cleanBullets = (content) => content.map(line => line.replace(/^[\*\-•]\s+/, ''));
-    
+
+    // Process left column content
     if (leftContent.length > 0) {
       const contentToDisplay = hasBullets(leftContent) ? cleanBullets(leftContent) : leftContent;
       const leftText = contentToDisplay.join('\n');
-      const leftBox = slide.insertTextBox(leftText, leftColumnX, contentStartY, columnWidth, 150);
-      leftBox.getText().getTextStyle().setFontSize(16);
+      const leftBox = slide.insertTextBox(
+        leftText,
+        LAYOUT.TWO_COLUMN.LEFT_COLUMN_X,
+        contentStartY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.CONTENT_HEIGHT
+      );
+      leftBox.getText().getTextStyle().setFontSize(LAYOUT.TWO_COLUMN.CONTENT_FONT_SIZE);
       if (hasBullets(leftContent)) {
         leftBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
       }
     }
-    
-    let leftMediaY = contentStartY + (leftContent.length > 0 ? 160 : 0);
-    leftImages.forEach((imageUrl, index) => {
-      try {
-        if (imageUrl.startsWith('GDRIVE:')) {
-          const fileId = imageUrl.replace('GDRIVE:', '').trim();
-          const file = DriveApp.getFileById(fileId);
-          const blob = file.getBlob();
-          slide.insertImage(blob, leftColumnX, leftMediaY, columnWidth, 90);
-        } else {
-          slide.insertImage(imageUrl, leftColumnX, leftMediaY, columnWidth, 90);
-        }
-        leftMediaY += 100;
-      } catch (e) {
-        const errorBox = slide.insertTextBox('[Image Error]', leftColumnX, leftMediaY, columnWidth, 30);
-        errorBox.getText().getTextStyle().setFontSize(10).setItalic(true);
-        leftMediaY += 40;
-      }
+
+    // Process left column media
+    let leftMediaY = contentStartY + (leftContent.length > 0 ? LAYOUT.TWO_COLUMN.MEDIA_OFFSET : 0);
+    leftImages.forEach((imageUrl) => {
+      leftMediaY += insertImageWithErrorHandling(
+        slide,
+        imageUrl,
+        LAYOUT.TWO_COLUMN.LEFT_COLUMN_X,
+        leftMediaY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.MEDIA_HEIGHT,
+        LAYOUT.TWO_COLUMN.ERROR_FONT_SIZE
+      );
     });
-    
-    leftVideos.forEach((videoUrl, index) => {
-      try {
-        slide.insertVideo(videoUrl, leftColumnX, leftMediaY, columnWidth, 90);
-        leftMediaY += 100;
-      } catch (e) {
-        const errorBox = slide.insertTextBox('[Video Error]', leftColumnX, leftMediaY, columnWidth, 30);
-        errorBox.getText().getTextStyle().setFontSize(10).setItalic(true);
-        leftMediaY += 40;
-      }
+
+    leftVideos.forEach((videoUrl) => {
+      leftMediaY += insertVideoWithErrorHandling(
+        slide,
+        videoUrl,
+        LAYOUT.TWO_COLUMN.LEFT_COLUMN_X,
+        leftMediaY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.MEDIA_HEIGHT,
+        LAYOUT.TWO_COLUMN.ERROR_FONT_SIZE
+      );
     });
-    
+
+    // Process right column content
     if (rightContent.length > 0) {
       const contentToDisplay = hasBullets(rightContent) ? cleanBullets(rightContent) : rightContent;
       const rightText = contentToDisplay.join('\n');
-      const rightBox = slide.insertTextBox(rightText, rightColumnX, contentStartY, columnWidth, 150);
-      rightBox.getText().getTextStyle().setFontSize(16);
+      const rightBox = slide.insertTextBox(
+        rightText,
+        LAYOUT.TWO_COLUMN.RIGHT_COLUMN_X,
+        contentStartY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.CONTENT_HEIGHT
+      );
+      rightBox.getText().getTextStyle().setFontSize(LAYOUT.TWO_COLUMN.CONTENT_FONT_SIZE);
       if (hasBullets(rightContent)) {
         rightBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
       }
     }
-    
-    let rightMediaY = contentStartY + (rightContent.length > 0 ? 160 : 0);
-    rightImages.forEach((imageUrl, index) => {
-      try {
-        if (imageUrl.startsWith('GDRIVE:')) {
-          const fileId = imageUrl.replace('GDRIVE:', '').trim();
-          const file = DriveApp.getFileById(fileId);
-          const blob = file.getBlob();
-          slide.insertImage(blob, rightColumnX, rightMediaY, columnWidth, 90);
-        } else {
-          slide.insertImage(imageUrl, rightColumnX, rightMediaY, columnWidth, 90);
-        }
-        rightMediaY += 100;
-      } catch (e) {
-        const errorBox = slide.insertTextBox('[Image Error]', rightColumnX, rightMediaY, columnWidth, 30);
-        errorBox.getText().getTextStyle().setFontSize(10).setItalic(true);
-        rightMediaY += 40;
-      }
+
+    // Process right column media
+    let rightMediaY = contentStartY + (rightContent.length > 0 ? LAYOUT.TWO_COLUMN.MEDIA_OFFSET : 0);
+    rightImages.forEach((imageUrl) => {
+      rightMediaY += insertImageWithErrorHandling(
+        slide,
+        imageUrl,
+        LAYOUT.TWO_COLUMN.RIGHT_COLUMN_X,
+        rightMediaY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.MEDIA_HEIGHT,
+        LAYOUT.TWO_COLUMN.ERROR_FONT_SIZE
+      );
     });
-    
-    rightVideos.forEach((videoUrl, index) => {
-      try {
-        slide.insertVideo(videoUrl, rightColumnX, rightMediaY, columnWidth, 90);
-        rightMediaY += 100;
-      } catch (e) {
-        const errorBox = slide.insertTextBox('[Video Error]', rightColumnX, rightMediaY, columnWidth, 30);
-        errorBox.getText().getTextStyle().setFontSize(10).setItalic(true);
-        rightMediaY += 40;
-      }
+
+    rightVideos.forEach((videoUrl) => {
+      rightMediaY += insertVideoWithErrorHandling(
+        slide,
+        videoUrl,
+        LAYOUT.TWO_COLUMN.RIGHT_COLUMN_X,
+        rightMediaY,
+        LAYOUT.TWO_COLUMN.COLUMN_WIDTH,
+        LAYOUT.TWO_COLUMN.MEDIA_HEIGHT,
+        LAYOUT.TWO_COLUMN.ERROR_FONT_SIZE
+      );
     });
 }
 
-/**
- * Extracts the Google Doc ID from a URL.
- */
-function extractDocIdFromUrl(url) {
-  const match = url.match(/document\/d\/([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
-}
