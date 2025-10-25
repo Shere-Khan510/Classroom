@@ -1,3 +1,16 @@
 node_modules/
 .clasp.json
 *.log
+
+# Claude Code configuration
+.claude/
+
+# Google Drive shortcut files (contain personal info)
+*.gslides
+*.gdoc
+*.gsheet
+*.gform
+
+# Old archives and backups
+skills/
+*.zip
