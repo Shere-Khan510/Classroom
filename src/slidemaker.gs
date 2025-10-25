@@ -373,16 +373,93 @@ function insertVideoWithErrorHandling(slide, videoUrl, x, y, width, height, erro
  */
 function setSpeakerNotes(slide, notesText) {
   if (!notesText || notesText.trim().length === 0) {
+    Logger.log('setSpeakerNotes: No notes to add (empty or null)');
     return; // No notes to add
   }
 
+  Logger.log('setSpeakerNotes: Adding notes: ' + notesText.substring(0, 50) + '...');
+
   try {
-    const notesPage = slide.getSpeakerNotesPage();
+    const notesPage = slide.getNotesPage();
     const notesShape = notesPage.getSpeakerNotesShape();
     notesShape.getText().setText(notesText.trim());
+    Logger.log('setSpeakerNotes: Successfully set speaker notes');
   } catch (e) {
     Logger.log('Error setting speaker notes: ' + e.message);
   }
+}
+
+/**
+ * Parses markdown text and returns plain text with formatting instructions.
+ * Supports **bold** syntax.
+ *
+ * @param {string} text - The markdown text to parse
+ * @return {Object} Object with {text: string, boldRanges: Array<{start: number, end: number}>}
+ *
+ * @example
+ * parseMarkdownFormatting('This is **bold** text')
+ * // returns { text: 'This is bold text', boldRanges: [{start: 8, end: 12}] }
+ */
+function parseMarkdownFormatting(text) {
+  if (!text) {
+    return { text: '', boldRanges: [] };
+  }
+
+  const boldRanges = [];
+  let plainText = text;
+  let offset = 0;
+
+  // Find all **bold** patterns
+  const boldRegex = /\*\*(.+?)\*\*/g;
+  let match;
+
+  while ((match = boldRegex.exec(text)) !== null) {
+    const matchStart = match.index - offset;
+    const matchLength = match[1].length;
+
+    // Record the range (after removing the ** markers)
+    boldRanges.push({
+      start: matchStart,
+      end: matchStart + matchLength
+    });
+
+    // Remove the ** markers from the text
+    plainText = plainText.replace('**' + match[1] + '**', match[1]);
+    offset += 4; // We removed 4 characters (two ** pairs)
+  }
+
+  return {
+    text: plainText,
+    boldRanges: boldRanges
+  };
+}
+
+/**
+ * Applies markdown formatting to a text range in Google Slides.
+ * @param {TextRange} textRange - The Google Slides text range to format
+ * @param {string} markdownText - The text with markdown formatting
+ *
+ * @example
+ * applyMarkdownFormatting(textBox.getText(), 'This is **bold** text')
+ */
+function applyMarkdownFormatting(textRange, markdownText) {
+  if (!textRange || !markdownText) {
+    return;
+  }
+
+  const parsed = parseMarkdownFormatting(markdownText);
+
+  // Set the plain text
+  textRange.setText(parsed.text);
+
+  // Apply bold formatting to specified ranges
+  parsed.boldRanges.forEach(range => {
+    try {
+      textRange.getRange(range.start, range.end).getTextStyle().setBold(true);
+    } catch (e) {
+      Logger.log('Error applying bold formatting: ' + e.message);
+    }
+  });
 }
 
 // ============================================================================
@@ -520,29 +597,43 @@ function processGoogleDoc(docUrl, clearExisting) {
  * processTextContent(markdown, true);
  */
 function processTextContent(outlineText, clearExisting) {
+  Logger.log('=== START processTextContent ===');
+  Logger.log('Content length: ' + (outlineText ? outlineText.length : 'null'));
+  Logger.log('Clear existing: ' + clearExisting);
+
   const ui = SlidesApp.getUi();
-  
+
   if (!outlineText || outlineText.trim().length === 0) {
+    Logger.log('ERROR: Empty content');
     ui.alert('Empty Content', 'The content appears to be empty. Please add content and try again.', ui.ButtonSet.OK);
     return;
   }
-  
+
+  Logger.log('Getting active presentation...');
   const presentation = SlidesApp.getActivePresentation();
-  
+  Logger.log('Presentation ID: ' + presentation.getId());
+
   if (clearExisting) {
+    Logger.log('Clearing existing slides...');
     try {
       const slides = presentation.getSlides();
+      Logger.log('Found ' + slides.length + ' slides to clear');
       slides.forEach(slide => slide.remove());
+      Logger.log('Slides cleared successfully');
     } catch (e) {
+      Logger.log('ERROR clearing slides: ' + e.message);
       ui.alert('Error', 'Could not clear existing slides: ' + e.message, ui.ButtonSet.OK);
       return;
     }
   }
-  
+
+  Logger.log('Parsing document...');
   const parsedSlides = parseDocument(outlineText);
-  
+  Logger.log('Parsed ' + parsedSlides.length + ' slides');
+
   if (parsedSlides.length === 0) {
-    ui.alert('No Content Found', 
+    Logger.log('ERROR: No slides parsed');
+    ui.alert('No Content Found',
       'Could not find any slide content in the document.\n\n' +
       'Required format (Markdown):\n' +
       '• # Title (for title slide)\n' +
@@ -550,13 +641,15 @@ function processTextContent(outlineText, clearExisting) {
       '• ### Subtitle (optional)\n' +
       '• * bullet point\n' +
       '• Image: [URL or GDRIVE:fileId]\n' +
-      '• Video: [YouTube URL]', 
+      '• Video: [YouTube URL]',
       ui.ButtonSet.OK);
     return;
   }
-  
+
+  Logger.log('Creating slides...');
   try {
     parsedSlides.forEach((slideData, index) => {
+      Logger.log('Processing slide ' + (index + 1) + '/' + parsedSlides.length);
       if (slideData.isTitle) {
         processTitleSlide(presentation, slideData);
       } else if (slideData.layout === 'two-column') {
@@ -565,11 +658,16 @@ function processTextContent(outlineText, clearExisting) {
         processContentSlide(presentation, slideData);
       }
     });
-    
+
+    Logger.log('SUCCESS: All slides created');
     ui.alert('Success!', `Created ${parsedSlides.length} slide(s) in your presentation.`, ui.ButtonSet.OK);
   } catch (e) {
+    Logger.log('ERROR creating slides: ' + e.message);
+    Logger.log('Stack trace: ' + e.stack);
     ui.alert('Error Creating Slides', 'An error occurred while creating slides: ' + e.message, ui.ButtonSet.OK);
   }
+
+  Logger.log('=== END processTextContent ===');
 }
 
 /**
@@ -632,6 +730,7 @@ function parseDocument(text) {
         inSpeakerNotes = true;
         const initialNotes = speakerNotesMatch[1]; // Text after the marker on same line
         currentSlide.notes = initialNotes ? initialNotes + '\n' : '';
+        Logger.log('parseDocument: Started capturing speaker notes for slide. Initial: ' + initialNotes);
       }
       continue;
     }
@@ -645,6 +744,7 @@ function parseDocument(text) {
           trimmedLine.match(REGEX.TWO_COLUMN_MARKER) ||
           trimmedLine === '---') {
         // Exit speaker notes mode, process this line normally
+        Logger.log('parseDocument: Stopped capturing speaker notes (hit new section)');
         inSpeakerNotes = false;
       } else {
         // Continue capturing speaker notes
@@ -677,7 +777,8 @@ function parseDocument(text) {
         leftImages: [],
         rightImages: [],
         leftVideos: [],
-        rightVideos: []
+        rightVideos: [],
+        notes: ''
       };
 
       // Reset state flags
@@ -917,11 +1018,14 @@ function processTitleSlide(presentation, slideData) {
     const title = slideData.title || "Untitled Presentation";
     const subtitle = slideData.subtitle || "";
 
+    Logger.log('processTitleSlide: title=' + title + ', has notes=' + (!!slideData.notes));
+
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
 
-    // Add centered title
+    // Add centered title with markdown formatting
+    const parsedTitle = parseMarkdownFormatting(title);
     const titleBox = slide.insertTextBox(
-      title,
+      parsedTitle.text,
       LAYOUT.TITLE.X,
       LAYOUT.TITLE.Y,
       LAYOUT.TITLE.WIDTH,
@@ -930,10 +1034,11 @@ function processTitleSlide(presentation, slideData) {
     titleBox.getText().getTextStyle().setFontSize(LAYOUT.TITLE.FONT_SIZE).setBold(true);
     titleBox.getText().getParagraphStyle().setParagraphAlignment(SlidesApp.ParagraphAlignment.CENTER);
 
-    // Add centered subtitle if present
+    // Add centered subtitle if present with markdown formatting
     if (subtitle) {
+      const parsedSubtitle = parseMarkdownFormatting(subtitle);
       const subtitleBox = slide.insertTextBox(
-        subtitle,
+        parsedSubtitle.text,
         LAYOUT.TITLE_SUBTITLE.X,
         LAYOUT.TITLE_SUBTITLE.Y,
         LAYOUT.TITLE_SUBTITLE.WIDTH,
@@ -941,6 +1046,15 @@ function processTitleSlide(presentation, slideData) {
       );
       subtitleBox.getText().getTextStyle().setFontSize(LAYOUT.TITLE_SUBTITLE.FONT_SIZE);
       subtitleBox.getText().getParagraphStyle().setParagraphAlignment(SlidesApp.ParagraphAlignment.CENTER);
+
+      // Apply bold formatting to subtitle ranges
+      parsedSubtitle.boldRanges.forEach(range => {
+        try {
+          subtitleBox.getText().getRange(range.start, range.end).getTextStyle().setBold(true);
+        } catch (e) {
+          Logger.log('Error applying bold to title subtitle: ' + e.message);
+        }
+      });
     }
 
     // Add speaker notes if present
@@ -961,11 +1075,17 @@ function processContentSlide(presentation, slideData) {
     const images = slideData.images || [];
     const videos = slideData.videos || [];
 
+    Logger.log('processContentSlide: headline=' + headline + ', has notes=' + (!!slideData.notes));
+    if (slideData.notes) {
+      Logger.log('  notes content: ' + slideData.notes.substring(0, 100));
+    }
+
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
 
-    // Add headline
+    // Add headline with markdown formatting
+    const parsedHeadline = parseMarkdownFormatting(headline);
     const headlineBox = slide.insertTextBox(
-      headline,
+      parsedHeadline.text,
       LAYOUT.HEADLINE.X,
       LAYOUT.HEADLINE.Y,
       LAYOUT.HEADLINE.WIDTH,
@@ -973,16 +1093,26 @@ function processContentSlide(presentation, slideData) {
     );
     headlineBox.getText().getTextStyle().setFontSize(LAYOUT.HEADLINE.FONT_SIZE).setBold(true);
 
-    // Add subtitle if present
+    // Add subtitle if present with markdown formatting
     if (subtitle) {
+      const parsedSubtitle = parseMarkdownFormatting(subtitle);
       const subtitleBox = slide.insertTextBox(
-        subtitle,
+        parsedSubtitle.text,
         LAYOUT.SUBTITLE.X,
         LAYOUT.SUBTITLE.Y,
         LAYOUT.SUBTITLE.WIDTH,
         LAYOUT.SUBTITLE.HEIGHT
       );
       subtitleBox.getText().getTextStyle().setFontSize(LAYOUT.SUBTITLE.FONT_SIZE).setItalic(true);
+
+      // Apply bold formatting to subtitle ranges
+      parsedSubtitle.boldRanges.forEach(range => {
+        try {
+          subtitleBox.getText().getRange(range.start, range.end).getTextStyle().setBold(true);
+        } catch (e) {
+          Logger.log('Error applying bold to subtitle: ' + e.message);
+        }
+      });
     }
 
     const hasMedia = images.length > 0 || videos.length > 0;
@@ -1021,8 +1151,14 @@ function processContentSlide(presentation, slideData) {
       const bulletWidth = hasMedia ? LAYOUT.BULLETS.WIDTH_WITH_MEDIA : LAYOUT.BULLETS.WIDTH_NO_MEDIA;
       const bulletFontSize = hasMedia ? LAYOUT.BULLETS.FONT_SIZE_WITH_MEDIA : LAYOUT.BULLETS.FONT_SIZE_NO_MEDIA;
 
+      // Parse all bullet points for markdown and build combined text
+      const parsedBullets = bulletPoints.map(bullet => parseMarkdownFormatting(bullet));
+      const plainBullets = parsedBullets.map(parsed => parsed.text);
+      const combinedText = plainBullets.join('\n');
+
+      // Create text box with plain text
       const bodyBox = slide.insertTextBox(
-        bulletPoints.join('\n'),
+        combinedText,
         LAYOUT.BULLETS.X,
         bulletsStartY,
         bulletWidth,
@@ -1030,6 +1166,22 @@ function processContentSlide(presentation, slideData) {
       );
       bodyBox.getText().getTextStyle().setFontSize(bulletFontSize);
       bodyBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
+
+      // Apply bold formatting to each bullet's ranges
+      let currentOffset = 0;
+      parsedBullets.forEach((parsed, index) => {
+        parsed.boldRanges.forEach(range => {
+          try {
+            const globalStart = currentOffset + range.start;
+            const globalEnd = currentOffset + range.end;
+            bodyBox.getText().getRange(globalStart, globalEnd).getTextStyle().setBold(true);
+          } catch (e) {
+            Logger.log('Error applying bold to bullet ' + index + ': ' + e.message);
+          }
+        });
+        // Move offset by the length of this bullet's text plus newline
+        currentOffset += parsed.text.length + 1; // +1 for the newline character
+      });
     }
 
     // Add speaker notes if present
@@ -1054,10 +1206,11 @@ function processTwoColumnSlide(presentation, slideData) {
 
     const slide = presentation.appendSlide(SlidesApp.PredefinedLayout.BLANK);
 
-    // Add headline if present
+    // Add headline if present with markdown formatting
     if (headline) {
+      const parsedHeadline = parseMarkdownFormatting(headline);
       const headlineBox = slide.insertTextBox(
-        headline,
+        parsedHeadline.text,
         LAYOUT.TWO_COLUMN.HEADLINE_X,
         LAYOUT.TWO_COLUMN.HEADLINE_Y,
         LAYOUT.TWO_COLUMN.HEADLINE_WIDTH,
@@ -1077,7 +1230,12 @@ function processTwoColumnSlide(presentation, slideData) {
     // Process left column content
     if (leftContent.length > 0) {
       const contentToDisplay = hasBullets(leftContent) ? cleanBullets(leftContent) : leftContent;
-      const leftText = contentToDisplay.join('\n');
+
+      // Parse markdown formatting for each line
+      const parsedLines = contentToDisplay.map(line => parseMarkdownFormatting(line));
+      const plainLines = parsedLines.map(parsed => parsed.text);
+      const leftText = plainLines.join('\n');
+
       const leftBox = slide.insertTextBox(
         leftText,
         LAYOUT.TWO_COLUMN.LEFT_COLUMN_X,
@@ -1089,6 +1247,21 @@ function processTwoColumnSlide(presentation, slideData) {
       if (hasBullets(leftContent)) {
         leftBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
       }
+
+      // Apply bold formatting
+      let currentOffset = 0;
+      parsedLines.forEach((parsed, index) => {
+        parsed.boldRanges.forEach(range => {
+          try {
+            const globalStart = currentOffset + range.start;
+            const globalEnd = currentOffset + range.end;
+            leftBox.getText().getRange(globalStart, globalEnd).getTextStyle().setBold(true);
+          } catch (e) {
+            Logger.log('Error applying bold to left column line ' + index + ': ' + e.message);
+          }
+        });
+        currentOffset += parsed.text.length + 1;
+      });
     }
 
     // Process left column media
@@ -1120,7 +1293,12 @@ function processTwoColumnSlide(presentation, slideData) {
     // Process right column content
     if (rightContent.length > 0) {
       const contentToDisplay = hasBullets(rightContent) ? cleanBullets(rightContent) : rightContent;
-      const rightText = contentToDisplay.join('\n');
+
+      // Parse markdown formatting for each line
+      const parsedLines = contentToDisplay.map(line => parseMarkdownFormatting(line));
+      const plainLines = parsedLines.map(parsed => parsed.text);
+      const rightText = plainLines.join('\n');
+
       const rightBox = slide.insertTextBox(
         rightText,
         LAYOUT.TWO_COLUMN.RIGHT_COLUMN_X,
@@ -1132,6 +1310,21 @@ function processTwoColumnSlide(presentation, slideData) {
       if (hasBullets(rightContent)) {
         rightBox.getText().getListStyle().applyListPreset(SlidesApp.ListPreset.DISC_CIRCLE_SQUARE);
       }
+
+      // Apply bold formatting
+      let currentOffset = 0;
+      parsedLines.forEach((parsed, index) => {
+        parsed.boldRanges.forEach(range => {
+          try {
+            const globalStart = currentOffset + range.start;
+            const globalEnd = currentOffset + range.end;
+            rightBox.getText().getRange(globalStart, globalEnd).getTextStyle().setBold(true);
+          } catch (e) {
+            Logger.log('Error applying bold to right column line ' + index + ': ' + e.message);
+          }
+        });
+        currentOffset += parsed.text.length + 1;
+      });
     }
 
     // Process right column media
